@@ -1,11 +1,42 @@
-<div align="center">
+# SahiKhata
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Fixed-fee **fixed asset** and **vendor master reconciliation** web application for manufacturing MSMEs (₹10–100 Cr turnover) running Tally or SAP across the Uttarakhand industrial belt (Haridwar SIDCUL, Selaqui, Dehradun, Rudrapur) and North India.
 
-  <h1>Built with AI Studio</h2>
+## Tech Stack
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+- **Framework**: React 19 + TypeScript + Vite
+- **Styling**: Tailwind CSS v4
+- **Icons**: Lucide React
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## Local Development
 
-</div>
+```bash
+npm install
+npm run dev
+```
+
+Runs at `http://localhost:3000`.
+
+## Production Build
+
+```bash
+npm run lint
+npm run build
+```
+
+## Deploying via GitHub & Vercel
+
+1. **Push to GitHub**:
+   ```bash
+   git init
+   git add .
+   git commit -m "Initial commit: SahiKhata web application"
+   git branch -M main
+   git remote add origin https://github.com/<your-username>/sahikhata.git
+   git push -u origin main
+   ```
+
+2. **Deploy on Vercel**:
+   - Import the GitHub repository in the [Vercel Dashboard](https://vercel.com/new).
+   - Vercel automatically detects **Vite** via `vercel.json` (`npm run build` → `dist/`).
+   - No environment variables or database secrets are required for the static production deployment.
