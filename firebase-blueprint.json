@@ -1,0 +1,156 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile stored privately per user UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID matching the document ID."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "description": "Verified Google account email address."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "User display name from Google profile."
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional Google avatar URL."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when profile was first created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest profile sign-in update."
+        }
+      },
+      "required": ["uid", "email", "displayName", "createdAt", "updatedAt"]
+    },
+    "HealthCheckRequest": {
+      "title": "HealthCheckRequest",
+      "description": "Reconciliation quick-check or pilot booking submitted by an authenticated user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Document identifier and reference code."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the authenticated user who owns this request."
+        },
+        "ownerEmail": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "description": "Verified email of the user who created the request."
+        },
+        "companyName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "Manufacturing plant or CA firm name."
+        },
+        "location": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Industrial cluster or city."
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Submitter role in the organization."
+        },
+        "erp": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Accounting or ERP system in use."
+        },
+        "contact": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Work email or phone number."
+        },
+        "engagementType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Selected quick check, pilot, or CA partnership track."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Optional audit timeline or scope notes."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["submitted", "cancelled"],
+          "description": "Lifecycle status of the request."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of request creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest update."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "ownerEmail",
+        "companyName",
+        "location",
+        "role",
+        "erp",
+        "contact",
+        "engagementType",
+        "notes",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profiles accessible only to the owning authenticated user."
+    },
+    "/requests/{requestId}": {
+      "schema": { "$ref": "#/entities/HealthCheckRequest" },
+      "description": "Reconciliation health-check requests owned by and scoped to the creating user."
+    }
+  }
+}

@@ -1,9 +1,25 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { CheckCircle2, Copy, FileText, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, Copy, FileText, ShieldCheck, Trash2, XCircle } from 'lucide-react';
+import {
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+  type Timestamp,
+} from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import type { SelectedScopePayload } from './HealthCheckEstimator';
 
-export interface BookingRecord {
+export interface FirestoreBookingRecord {
   id: string;
+  ownerId: string;
+  ownerEmail: string;
   companyName: string;
   location: string;
   role: string;
@@ -11,7 +27,9 @@ export interface BookingRecord {
   contact: string;
   engagementType: string;
   notes: string;
-  submittedAt: string;
+  status: 'submitted' | 'cancelled';
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
 }
 
 interface BookingSectionProps {
@@ -19,9 +37,9 @@ interface BookingSectionProps {
   presetRole: string | null;
 }
 
-const STORAGE_KEY = 'sahikhata_quickcheck_requests_v1';
-
 export function BookingSection({ appliedScope, presetRole }: BookingSectionProps) {
+  const { user, authReady, signingIn, authError, signInWithGoogle, clearAuthError } = useAuth();
+
   const [companyName, setCompanyName] = useState('');
   const [location, setLocation] = useState('Haridwar (SIDCUL)');
   const [role, setRole] = useState('Finance Head / Accounts Manager');
@@ -30,8 +48,54 @@ export function BookingSection({ appliedScope, presetRole }: BookingSectionProps
   const [engagementType, setEngagementType] = useState('Free 15-Min Quick Check');
   const [notes, setNotes] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [submittedRecord, setSubmittedRecord] = useState<BookingRecord | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
+  const [savedRequests, setSavedRequests] = useState<FirestoreBookingRecord[]>([]);
+  const [loadingRequests, setLoadingRequests] = useState(false);
   const [copiedNda, setCopiedNda] = useState(false);
+
+  useEffect(() => {
+    if (user?.email && !contact) {
+      setContact(user.email);
+    }
+  }, [user, contact]);
+
+  useEffect(() => {
+    if (!authReady || !user) {
+      setSavedRequests([]);
+      setLoadingRequests(false);
+      return;
+    }
+
+    setLoadingRequests(true);
+    const reqQuery = query(
+      collection(db, 'requests'),
+      where('ownerId', '==', user.uid)
+    );
+
+    const unsubscribe = onSnapshot(
+      reqQuery,
+      (snapshot) => {
+        const items: FirestoreBookingRecord[] = snapshot.docs.map((d) => ({
+          ...(d.data() as Omit<FirestoreBookingRecord, 'id'>),
+          id: d.id,
+        }));
+        items.sort((a, b) => {
+          const aMs = a.createdAt?.toMillis?.() ?? 0;
+          const bMs = b.createdAt?.toMillis?.() ?? 0;
+          return bMs - aMs;
+        });
+        setSavedRequests(items);
+        setLoadingRequests(false);
+      },
+      (error) => {
+        setLoadingRequests(false);
+        handleFirestoreError(error, OperationType.LIST, 'requests');
+      }
+    );
+
+    return () => unsubscribe();
+  }, [authReady, user]);
 
   useEffect(() => {
     if (appliedScope) {
@@ -74,50 +138,89 @@ export function BookingSection({ appliedScope, presetRole }: BookingSectionProps
     return emailPattern.test(trimmed) || phonePattern.test(trimmed);
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    clearAuthError();
 
     if (!companyName.trim()) {
       setErrorMsg('Please enter your company or CA firm name.');
       return;
     }
 
-    if (!validateContact(contact)) {
+    const contactToSave = contact.trim() || user?.email || '';
+    if (!validateContact(contactToSave)) {
       setErrorMsg('Please enter a valid work email address or 10-digit phone number.');
       return;
     }
 
-    const record: BookingRecord = {
-      id: `SK-${Math.floor(1000 + Math.random() * 9000)}`,
-      companyName: companyName.trim(),
-      location,
-      role,
-      erp,
-      contact: contact.trim(),
-      engagementType,
-      notes: notes.trim(),
-      submittedAt: new Date().toLocaleDateString('en-IN', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      }),
-    };
-
-    try {
-      const existingRaw = localStorage.getItem(STORAGE_KEY);
-      const existing: BookingRecord[] = existingRaw ? JSON.parse(existingRaw) : [];
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([record, ...existing.slice(0, 4)]));
-    } catch {
-      // Storage unavailable in restricted private browsing; proceed cleanly
+    if (!user) {
+      await signInWithGoogle();
     }
 
-    setSubmittedRecord(record);
+    const activeUser = auth.currentUser;
+    if (!activeUser || !activeUser.email) {
+      setErrorMsg('Please complete Google Sign-In to save your health-check request.');
+      return;
+    }
+
+    setSubmitting(true);
+    const requestId = `SK-${Date.now().toString(36).toUpperCase()}-${Math.floor(
+      100 + Math.random() * 900
+    )}`;
+    const docPath = `requests/${requestId}`;
+
+    try {
+      await setDoc(doc(db, 'requests', requestId), {
+        id: requestId.slice(0, 64),
+        ownerId: activeUser.uid,
+        ownerEmail: activeUser.email.slice(0, 254),
+        companyName: companyName.trim().slice(0, 160),
+        location: location.slice(0, 120),
+        role: role.slice(0, 100),
+        erp: erp.slice(0, 80),
+        contact: contactToSave.slice(0, 160),
+        engagementType: engagementType.slice(0, 120),
+        notes: notes.trim().slice(0, 1000),
+        status: 'submitted',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setLastCreatedId(requestId);
+      setCompanyName('');
+      setNotes('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, docPath);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
+  const handleCancelRequest = async (req: FirestoreBookingRecord) => {
+    const docPath = `requests/${req.id}`;
+    try {
+      await updateDoc(doc(db, 'requests', req.id), {
+        status: 'cancelled',
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, docPath);
+    }
+  };
+
+  const handleDeleteRequest = async (req: FirestoreBookingRecord) => {
+    const docPath = `requests/${req.id}`;
+    try {
+      await deleteDoc(doc(db, 'requests', req.id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, docPath);
+    }
+  };
+
+  const latestRequest = savedRequests[0] || null;
   const ndaText = `CONFIDENTIALITY & DATA HANDLING NOTE (SAHIKHATA)
-Prepared for: ${submittedRecord?.companyName || '[Client Company Name]'}
-Reference: ${submittedRecord?.id || 'Standard Pilot Protocol'}
+Prepared for: ${latestRequest?.companyName || companyName || '[Client Company Name]'}
+Reference: ${lastCreatedId || latestRequest?.id || 'Standard Pilot Protocol'}
 
 1. Purpose Limitation: Fixed asset registers, physical verification sheets, and vendor master extracts shared with SahiKhata are used solely to perform the agreed reconciliation health check.
 2. No External Disclosure: Client financial records, GSTINs, pricing, or supplier lists will never be shared with third parties, competitors, or external systems.
@@ -138,76 +241,77 @@ Reference: ${submittedRecord?.id || 'Standard Pilot Protocol'}
     <section id="book-check" className="py-16 lg:py-20 bg-slate-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
-          {/* Left: Form */}
-          <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 sm:p-8">
-            <p className="text-sm font-medium text-sky-700 mb-2">
-              Start With Zero Obligation
-            </p>
-            <h2 className="text-2xl font-bold tracking-tight text-slate-900 mb-2">
-              Book a free 15-minute quick check or fixed-fee pilot
-            </h2>
-            <p className="text-sm text-slate-600 mb-6">
-              Share your plant location and ERP setup. We reply with an anonymised sample error
-              report and our signed confidentiality note before any data leaves your desk.
-            </p>
-
-            {submittedRecord ? (
-              <div className="border border-emerald-200 bg-emerald-50/50 rounded-xl p-6 space-y-4">
-                <div className="flex items-start gap-3">
-                  <CheckCircle2
-                    className="w-6 h-6 text-emerald-700 shrink-0 mt-0.5"
-                    aria-hidden="true"
-                  />
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900">
-                      Request Saved ({submittedRecord.id})
-                    </h3>
-                    <p className="text-sm text-slate-700 mt-1">
-                      Thank you, <span className="font-semibold">{submittedRecord.companyName}</span>{' '}
-                      ({submittedRecord.location}). Your {submittedRecord.engagementType} inquiry
-                      for <span className="font-semibold">{submittedRecord.erp}</span> has been
-                      logged locally. For direct scheduling, email{' '}
-                      <a
-                        href={`mailto:paridhi.0251mba582@dgu.ac.in?subject=${encodeURIComponent(
-                          `SahiKhata Inquiry (${submittedRecord.id}) - ${submittedRecord.companyName}`
-                        )}&body=${encodeURIComponent(
-                          `Company: ${submittedRecord.companyName}\nLocation: ${submittedRecord.location}\nRole: ${submittedRecord.role}\nERP: ${submittedRecord.erp}\nEngagement: ${submittedRecord.engagementType}\nContact: ${submittedRecord.contact}\nNotes: ${submittedRecord.notes}`
-                        )}`}
-                        className="underline font-medium text-sky-800 hover:text-sky-900"
-                      >
-                        paridhi.0251mba582@dgu.ac.in
-                      </a>{' '}
-                      with one click to send your pre-filled brief.
-                    </p>
-                  </div>
+          {/* Left: Form + Saved Requests */}
+          <div className="lg:col-span-7 space-y-6">
+            <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 pb-5 border-b border-slate-100">
+                <div>
+                  <p className="text-sm font-medium text-sky-700 mb-1">
+                    Start With Zero Obligation
+                  </p>
+                  <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+                    Book a free 15-minute quick check or pilot
+                  </h2>
                 </div>
 
-                <div className="flex flex-wrap gap-3 pt-2">
-                  <a
-                    href={`mailto:paridhi.0251mba582@dgu.ac.in?subject=${encodeURIComponent(
-                      `SahiKhata Quick Check (${submittedRecord.id}) - ${submittedRecord.companyName}`
-                    )}&body=${encodeURIComponent(
-                      `Company: ${submittedRecord.companyName}\nLocation: ${submittedRecord.location}\nRole: ${submittedRecord.role}\nERP: ${submittedRecord.erp}\nEngagement: ${submittedRecord.engagementType}\nContact: ${submittedRecord.contact}\nNotes: ${submittedRecord.notes}`
-                    )}`}
-                    className="inline-flex items-center justify-center px-4 py-2.5 min-h-[40px] text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors"
-                  >
-                    Open Pre-Filled Email Brief
-                  </a>
+                {authReady && !user && (
                   <button
                     type="button"
-                    onClick={() => {
-                      setSubmittedRecord(null);
-                      setCompanyName('');
-                      setContact('');
-                    }}
-                    className="inline-flex items-center justify-center px-4 py-2.5 min-h-[40px] text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                    disabled={signingIn}
+                    onClick={() => void signInWithGoogle()}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2 min-h-[40px] text-xs font-semibold text-slate-900 bg-slate-50 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
                   >
-                    Submit Another Request
+                    <span>{signingIn ? 'Signing in...' : 'Sign in with Google'}</span>
                   </button>
-                </div>
+                )}
               </div>
-            ) : (
-              <form onSubmit={handleSubmit} noValidate className="space-y-4">
+
+              {authError && (
+                <p
+                  role="alert"
+                  className="mb-4 p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs font-medium text-rose-800"
+                >
+                  {authError}
+                </p>
+              )}
+
+              {user && (
+                <p className="mb-5 text-xs text-slate-600">
+                  Signed in as <span className="font-semibold text-slate-900">{user.email}</span>{' '}
+                  · Requests are saved privately to your account.
+                </p>
+              )}
+
+              {lastCreatedId && (
+                <div className="mb-6 border border-emerald-200 bg-emerald-50/50 rounded-xl p-5 space-y-3">
+                  <div className="flex items-start gap-3">
+                    <CheckCircle2
+                      className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5"
+                      aria-hidden="true"
+                    />
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">
+                        Request Saved ({lastCreatedId})
+                      </h3>
+                      <p className="text-xs text-slate-700 mt-1 leading-relaxed">
+                        Your inquiry has been saved to your Google-authenticated workspace. You can
+                        also send the details directly to{' '}
+                        <a
+                          href={`mailto:paridhi.0251mba582@dgu.ac.in?subject=${encodeURIComponent(
+                            `SahiKhata Quick Check (${lastCreatedId})`
+                          )}`}
+                          className="underline font-medium text-sky-800 hover:text-sky-900"
+                        >
+                          paridhi.0251mba582@dgu.ac.in
+                        </a>
+                        .
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <form onSubmit={(e) => void handleSubmit(e)} noValidate className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label
@@ -220,6 +324,7 @@ Reference: ${submittedRecord?.id || 'Standard Pilot Protocol'}
                       id="sk-company"
                       type="text"
                       required
+                      maxLength={160}
                       value={companyName}
                       onChange={(e) => setCompanyName(e.target.value)}
                       placeholder="e.g. Shivalik Precision Components"
@@ -323,6 +428,7 @@ Reference: ${submittedRecord?.id || 'Standard Pilot Protocol'}
                       id="sk-contact"
                       type="text"
                       required
+                      maxLength={160}
                       value={contact}
                       onChange={(e) => setContact(e.target.value)}
                       placeholder="finance@company.in or +91 98..."
@@ -341,6 +447,7 @@ Reference: ${submittedRecord?.id || 'Standard Pilot Protocol'}
                   <textarea
                     id="sk-notes"
                     rows={3}
+                    maxLength={1000}
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     placeholder="e.g. Statutory audit next month; physical verification sheet ready for ~250 machines."
@@ -356,11 +463,92 @@ Reference: ${submittedRecord?.id || 'Standard Pilot Protocol'}
 
                 <button
                   type="submit"
-                  className="w-full sm:w-auto inline-flex items-center justify-center px-6 py-3 min-h-[44px] text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-600 focus-visible:ring-offset-2"
+                  disabled={submitting || signingIn}
+                  className="w-full sm:w-auto inline-flex items-center justify-center px-6 py-3 min-h-[44px] text-sm font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors duration-150 cursor-pointer disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-600 focus-visible:ring-offset-2"
                 >
-                  Request Quick Check &amp; Confidentiality Note
+                  {submitting
+                    ? 'Saving Request...'
+                    : user
+                      ? 'Save Request & Confidentiality Note'
+                      : 'Sign in with Google & Submit Request'}
                 </button>
               </form>
+            </div>
+
+            {/* Authenticated User Saved Requests */}
+            {user && (
+              <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8">
+                <h3 className="text-base font-bold text-slate-900 mb-1">
+                  Your Saved Requests
+                </h3>
+                <p className="text-xs text-slate-500 mb-5">
+                  Synced across devices for {user.email}
+                </p>
+
+                {loadingRequests ? (
+                  <p className="text-sm text-slate-500">Loading your saved requests...</p>
+                ) : savedRequests.length === 0 ? (
+                  <p className="text-sm text-slate-500">
+                    No requests submitted yet. Use the form above to book a 15-minute quick check
+                    or pilot health check.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-slate-200">
+                    {savedRequests.map((req) => (
+                      <div
+                        key={req.id}
+                        className="py-4 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                            <span className="font-mono text-slate-700 tabular-nums">
+                              {req.id}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span
+                              className={
+                                req.status === 'cancelled'
+                                  ? 'text-slate-500 font-medium'
+                                  : 'text-emerald-700 font-semibold'
+                              }
+                            >
+                              {req.status === 'cancelled' ? 'Cancelled' : 'Submitted'}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>{req.erp}</span>
+                          </div>
+                          <p className="text-sm font-semibold text-slate-900">
+                            {req.companyName} — {req.location}
+                          </p>
+                          <p className="text-xs text-slate-600">{req.engagementType}</p>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {req.status !== 'cancelled' && (
+                            <button
+                              type="button"
+                              onClick={() => void handleCancelRequest(req)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 min-h-[36px] text-xs font-medium text-slate-700 bg-slate-100 rounded-md hover:bg-slate-200 transition-colors cursor-pointer"
+                            >
+                              <XCircle className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>Cancel</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteRequest(req)}
+                            aria-label={`Delete request ${req.id}`}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 min-h-[36px] text-xs font-medium text-rose-700 bg-rose-50 rounded-md hover:bg-rose-100 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Delete</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -375,7 +563,7 @@ Reference: ${submittedRecord?.id || 'Standard Pilot Protocol'}
               </div>
               <button
                 type="button"
-                onClick={handleCopyNda}
+                onClick={() => void handleCopyNda()}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-md hover:bg-slate-200 transition-colors cursor-pointer"
               >
                 <Copy className="w-3.5 h-3.5" aria-hidden="true" />

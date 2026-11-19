@@ -1,0 +1,139 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'photoURL', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid == userId && data.uid == request.auth.uid
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHealthCheckRequest(data, requestId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerId',
+          'ownerEmail',
+          'companyName',
+          'location',
+          'role',
+          'erp',
+          'contact',
+          'engagementType',
+          'notes',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'ownerId',
+          'ownerEmail',
+          'companyName',
+          'location',
+          'role',
+          'erp',
+          'contact',
+          'engagementType',
+          'notes',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.id is string && data.id == requestId && data.id.size() >= 3 && data.id.size() <= 64 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.ownerId is string && data.ownerId == request.auth.uid && data.ownerId.size() <= 128
+        && data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 254
+        && data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 160
+        && data.location is string && data.location.size() >= 1 && data.location.size() <= 120
+        && data.role is string && data.role.size() >= 1 && data.role.size() <= 100
+        && data.erp is string && data.erp.size() >= 1 && data.erp.size() <= 80
+        && data.contact is string && data.contact.size() >= 3 && data.contact.size() <= 160
+        && data.engagementType is string && data.engagementType.size() >= 1 && data.engagementType.size() <= 120
+        && data.notes is string && data.notes.size() <= 1000
+        && data.status in ['submitted', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isEmailVerified()
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isEmailVerified()
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt'])
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /requests/{requestId} {
+      allow get: if isValidId(requestId)
+        && isSignedIn()
+        && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn()
+        && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(requestId)
+        && isEmailVerified()
+        && isValidHealthCheckRequest(incoming(), requestId)
+        && incoming().status == 'submitted'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(requestId)
+        && isEmailVerified()
+        && existing().ownerId == request.auth.uid
+        && existing().status != 'cancelled'
+        && isValidHealthCheckRequest(incoming(), requestId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && incoming().status == 'cancelled'
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(requestId)
+        && isEmailVerified()
+        && existing().ownerId == request.auth.uid;
+    }
+  }
+}

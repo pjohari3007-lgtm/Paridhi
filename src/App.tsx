@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { AuthProvider } from './contexts/AuthContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Header } from './components/Header';
 import { HeroSection } from './components/HeroSection';
 import { CapabilitiesBento } from './components/CapabilitiesBento';
@@ -33,17 +35,21 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
-      <Header onBookClick={scrollToBooking} />
-      <main className="flex-1">
-        <HeroSection onBookClick={scrollToBooking} />
-        <CapabilitiesBento />
-        <AuditSampleLedger />
-        <HealthCheckEstimator onApplyScope={handleApplyScope} />
-        <ComparisonAndPartners onSelectCaPartner={handleSelectCaPartner} />
-        <BookingSection appliedScope={appliedScope} presetRole={presetRole} />
-      </main>
-      <Footer />
-    </div>
+    <ErrorBoundary>
+      <AuthProvider>
+        <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+          <Header onBookClick={scrollToBooking} />
+          <main className="flex-1">
+            <HeroSection onBookClick={scrollToBooking} />
+            <CapabilitiesBento />
+            <AuditSampleLedger />
+            <HealthCheckEstimator onApplyScope={handleApplyScope} />
+            <ComparisonAndPartners onSelectCaPartner={handleSelectCaPartner} />
+            <BookingSection appliedScope={appliedScope} presetRole={presetRole} />
+          </main>
+          <Footer />
+        </div>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
